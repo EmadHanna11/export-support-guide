@@ -361,24 +361,31 @@ function extractJson(data) {
 async function callClaude(prompt, _useSearch = false) {
   let lastErr;
   for (const model of OR_MODELS) {
-    try {
-      const response = await fetch("/api/claude", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model,
-          max_tokens: 2000,
-          response_format: { type: "json_object" },
-          messages: [
-            { role: "system", content: "You are a precise API that returns ONLY a single valid JSON object. No prose, no markdown, no code fences, no reasoning — just the JSON object." },
-            { role: "user", content: prompt },
-          ],
-        }),
-      });
-      const data = await response.json();
-      return extractJson(data);
-    } catch (e) {
-      lastErr = e; // try next model in the chain
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const response = await fetch("/api/claude", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            model,
+            max_tokens: 2000,
+            response_format: { type: "json_object" },
+            messages: [
+              { role: "system", content: "You are a precise API that returns ONLY a single valid JSON object. No prose, no markdown, no code fences, no reasoning — just the JSON object." },
+              { role: "user", content: prompt },
+            ],
+          }),
+        });
+        if (response.status === 429) {
+          await new Promise((r) => setTimeout(r, 2500)); // back off, then retry/next model
+          lastErr = new Error("rate limited (429)");
+          continue;
+        }
+        const data = await response.json();
+        return extractJson(data);
+      } catch (e) {
+        lastErr = e;
+      }
     }
   }
   throw lastErr || new Error("All models failed");
@@ -593,11 +600,9 @@ export default function ExportSupportGuide() {
   async function startDeepDive(country) {
     setPlanCountry(country); setErr(""); setStage("dd_loading");
     try {
-      const [p, d, ap] = await Promise.all([
-        callClaudeResearch(planPrompt(fields, country, result?.pillar_scores)),
-        callClaude(docsPrompt(fields, country)),
-        callClaude(actionPlanPrompt(fields, country, result?.pillar_scores)),
-      ]);
+      const p = await callClaudeResearch(planPrompt(fields, country, result?.pillar_scores));
+      const d = await callClaude(docsPrompt(fields, country));
+      const ap = await callClaude(actionPlanPrompt(fields, country, result?.pillar_scores));
       setPlan({ ...p, documents: d.documents || [], actionPlan: ap });
       setStage("deepdive");
     } catch { setErr(T[lang].error); setStage("results"); }
@@ -633,11 +638,9 @@ export default function ExportSupportGuide() {
     if (!fields.sector || !fields.size || !fields.exportStatus || !fields.product.trim() || !fields.countries.trim()) { setErr(t.required); return; }
     setErr(""); setStage("generating");
     try {
-      const [a, b, c] = await Promise.all([
-        callClaude(questionPrompt(fields, PILLAR_ORDER.slice(0, 2))),
-        callClaude(questionPrompt(fields, PILLAR_ORDER.slice(2, 4))),
-        callClaude(questionPrompt(fields, PILLAR_ORDER.slice(4))),
-      ]);
+      const a = await callClaude(questionPrompt(fields, PILLAR_ORDER.slice(0, 2)));
+      const b = await callClaude(questionPrompt(fields, PILLAR_ORDER.slice(2, 4)));
+      const c = await callClaude(questionPrompt(fields, PILLAR_ORDER.slice(4)));
       const qs = [...(a.questions || []), ...(b.questions || []), ...(c.questions || [])].filter((q) => PILLAR_ORDER.includes(q.pillar));
       if (qs.length < 6) throw new Error("too few questions");
       setQuestions(qs); setAnswers({}); setPillarIdx(0); setStage("questionnaire");
