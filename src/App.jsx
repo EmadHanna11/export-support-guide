@@ -332,10 +332,21 @@ const RUBRIC = `Fixed scoring rubric (0-100 per pillar). Anchors:
 const OR_MODEL = "openrouter/free";
 
 function extractJson(data) {
-  const text = data?.choices?.[0]?.message?.content || "";
-  const clean = (typeof text === "string" ? text : "").replace(/```json|```/g, "").trim();
+  // OpenRouter/OpenAI shape: choices[0].message.content (may be string or array)
+  let text = data?.choices?.[0]?.message?.content ?? "";
+  if (Array.isArray(text)) {
+    text = text.map((b) => (typeof b === "string" ? b : b?.text || "")).join("\n");
+  }
+  if (typeof text !== "string") text = String(text || "");
+  // Some models emit reasoning in a separate field; fall back to it if content is empty
+  if (!text.trim() && data?.choices?.[0]?.message?.reasoning) text = data.choices[0].message.reasoning;
+  // Strip code fences and any <think>...</think> reasoning blocks
+  let clean = text.replace(/<think>[\s\S]*?<\/think>/gi, "").replace(/```json|```/g, "").trim();
   const start = clean.indexOf("{");
   const end = clean.lastIndexOf("}");
+  if (start === -1 || end === -1 || end < start) {
+    throw new Error("No JSON object found in model response");
+  }
   return JSON.parse(clean.slice(start, end + 1));
 }
 
@@ -345,8 +356,12 @@ async function callClaude(prompt, _useSearch = false) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       model: OR_MODEL,
-      max_tokens: 1200,
-      messages: [{ role: "user", content: prompt }],
+      max_tokens: 2000,
+      response_format: { type: "json_object" },
+      messages: [
+        { role: "system", content: "You are a precise API that returns ONLY a single valid JSON object. No prose, no markdown, no code fences, no reasoning — just the JSON object." },
+        { role: "user", content: prompt },
+      ],
     }),
   });
   const data = await response.json();
@@ -370,8 +385,11 @@ async function callClaudeFile(base64, mediaType, prompt) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       model: OR_MODEL,
-      max_tokens: 1200,
-      messages: [{ role: "user", content }],
+      max_tokens: 2000,
+      messages: [
+        { role: "system", content: "You return ONLY a single valid JSON object. No prose, no markdown, no code fences." },
+        { role: "user", content },
+      ],
     }),
   });
   const data = await response.json();
