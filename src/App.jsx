@@ -329,9 +329,17 @@ const RUBRIC = `Fixed scoring rubric (0-100 per pillar). Anchors:
 
 // OpenRouter free auto-router: picks a working free model and filters for the
 // capabilities each request needs (tools, structured output, vision).
-const OR_MODEL = "openrouter/free";
+// Pinned instruction-tuned free models (fallback chain). Gemma is vision-capable and
+// doesn't emit <think> reasoning blocks, so JSON output is far more reliable than the
+// random openrouter/free router.
+const OR_MODELS = ["google/gemma-4-31b-it:free", "meta-llama/llama-3.3-70b-instruct:free", "openrouter/free"];
+const OR_MODEL = OR_MODELS[0];
 
 function extractJson(data) {
+  // Surface OpenRouter/provider errors instead of silently failing to parse
+  if (data?.error) {
+    throw new Error("Provider error: " + (data.error.message || JSON.stringify(data.error)));
+  }
   // OpenRouter/OpenAI shape: choices[0].message.content (may be string or array)
   let text = data?.choices?.[0]?.message?.content ?? "";
   if (Array.isArray(text)) {
@@ -351,21 +359,29 @@ function extractJson(data) {
 }
 
 async function callClaude(prompt, _useSearch = false) {
-  const response = await fetch("/api/claude", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model: OR_MODEL,
-      max_tokens: 2000,
-      response_format: { type: "json_object" },
-      messages: [
-        { role: "system", content: "You are a precise API that returns ONLY a single valid JSON object. No prose, no markdown, no code fences, no reasoning — just the JSON object." },
-        { role: "user", content: prompt },
-      ],
-    }),
-  });
-  const data = await response.json();
-  return extractJson(data);
+  let lastErr;
+  for (const model of OR_MODELS) {
+    try {
+      const response = await fetch("/api/claude", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model,
+          max_tokens: 2000,
+          response_format: { type: "json_object" },
+          messages: [
+            { role: "system", content: "You are a precise API that returns ONLY a single valid JSON object. No prose, no markdown, no code fences, no reasoning — just the JSON object." },
+            { role: "user", content: prompt },
+          ],
+        }),
+      });
+      const data = await response.json();
+      return extractJson(data);
+    } catch (e) {
+      lastErr = e; // try next model in the chain
+    }
+  }
+  throw lastErr || new Error("All models failed");
 }
 
 // No free model offers built-in web search, so research falls back to model knowledge.
