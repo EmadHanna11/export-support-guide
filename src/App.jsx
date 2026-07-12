@@ -329,10 +329,14 @@ const RUBRIC = `Fixed scoring rubric (0-100 per pillar). Anchors:
 
 // OpenRouter free auto-router: picks a working free model and filters for the
 // capabilities each request needs (tools, structured output, vision).
-// Pinned instruction-tuned free models (fallback chain). Gemma is vision-capable and
-// doesn't emit <think> reasoning blocks, so JSON output is far more reliable than the
-// random openrouter/free router.
-const OR_MODELS = ["google/gemma-4-31b-it:free", "meta-llama/llama-3.3-70b-instruct:free", "openrouter/free"];
+// Fallback chain across DIFFERENT providers — when one provider throttles (429),
+// the next has its own separate quota. Ordered by JSON reliability + vision support.
+const OR_MODELS = [
+  "google/gemma-4-31b-it:free",              // vision + tools, good JSON
+  "nvidia/nemotron-3-super-120b-a12b:free",  // separate provider quota
+  "openai/gpt-oss-120b:free",                // separate provider quota
+  "openrouter/free",                          // auto-router, last resort
+];
 const OR_MODEL = OR_MODELS[0];
 
 function extractJson(data) {
@@ -361,7 +365,7 @@ function extractJson(data) {
 async function callClaude(prompt, _useSearch = false) {
   let lastErr;
   for (const model of OR_MODELS) {
-    for (let attempt = 0; attempt < 2; attempt++) {
+    for (let attempt = 0; attempt < 3; attempt++) {
       try {
         const response = await fetch("/api/claude", {
           method: "POST",
@@ -376,15 +380,17 @@ async function callClaude(prompt, _useSearch = false) {
             ],
           }),
         });
-        if (response.status === 429) {
-          await new Promise((r) => setTimeout(r, 2500)); // back off, then retry/next model
-          lastErr = new Error("rate limited (429)");
+        if (response.status === 429 || response.status >= 500) {
+          // exponential backoff (1.5s, 3s, 6s) before retrying this model, then move on
+          await new Promise((r) => setTimeout(r, 1500 * Math.pow(2, attempt)));
+          lastErr = new Error("rate limited (" + response.status + ")");
           continue;
         }
         const data = await response.json();
         return extractJson(data);
       } catch (e) {
         lastErr = e;
+        await new Promise((r) => setTimeout(r, 800));
       }
     }
   }
@@ -601,7 +607,9 @@ export default function ExportSupportGuide() {
     setPlanCountry(country); setErr(""); setStage("dd_loading");
     try {
       const p = await callClaudeResearch(planPrompt(fields, country, result?.pillar_scores));
+      await new Promise((r) => setTimeout(r, 1200));
       const d = await callClaude(docsPrompt(fields, country));
+      await new Promise((r) => setTimeout(r, 1200));
       const ap = await callClaude(actionPlanPrompt(fields, country, result?.pillar_scores));
       setPlan({ ...p, documents: d.documents || [], actionPlan: ap });
       setStage("deepdive");
@@ -639,7 +647,9 @@ export default function ExportSupportGuide() {
     setErr(""); setStage("generating");
     try {
       const a = await callClaude(questionPrompt(fields, PILLAR_ORDER.slice(0, 2)));
+      await new Promise((r) => setTimeout(r, 1200));
       const b = await callClaude(questionPrompt(fields, PILLAR_ORDER.slice(2, 4)));
+      await new Promise((r) => setTimeout(r, 1200));
       const c = await callClaude(questionPrompt(fields, PILLAR_ORDER.slice(4)));
       const qs = [...(a.questions || []), ...(b.questions || []), ...(c.questions || [])].filter((q) => PILLAR_ORDER.includes(q.pillar));
       if (qs.length < 6) throw new Error("too few questions");
