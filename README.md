@@ -13,14 +13,17 @@ A bilingual (Arabic/English, full RTL) AI-powered SME export-readiness and marke
 
 ## Setup
 1. `npm install`
-2. Set environment variable `ANTHROPIC_API_KEY` (get one at https://platform.claude.com)
+2. Set environment variable `OPENROUTER_API_KEY` (get a free one at https://openrouter.ai/keys)
 3. `npm run dev` for local, or deploy to Vercel
 
 ## Deployment (Vercel)
 - Framework preset: Vite
-- Add `ANTHROPIC_API_KEY` in Project Settings → Environment Variables
+- Add `OPENROUTER_API_KEY` in Project Settings → Environment Variables
 - The serverless function at `api/claude.js` proxies AI calls and keeps the key server-side
 
 ## Architecture
 - `src/App.jsx` — React frontend (single file)
-- `api/claude.js` — serverless proxy (holds API key, basic rate limiting)
+- `api/claude.js` — serverless proxy to OpenRouter (holds API key, basic rate limiting)
+
+## Note on free-tier tradeoffs
+Uses OpenRouter's `openrouter/free` auto-router. Live web search is unavailable on free models (market analysis uses model knowledge). Free models have rate limits (~20 req/min, 200 req/day) and may vary in JSON reliability. For production, add OpenRouter credits or switch to a paid model / Anthropic key.

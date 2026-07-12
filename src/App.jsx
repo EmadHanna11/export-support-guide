@@ -90,7 +90,7 @@ const T = {
     execSummary: "Executive summary",
     scorecard: "Readiness scorecard",
     whyScore: "Why this score",
-    researched: "Market analysis informed by live web research",
+    researched: "Market analysis based on the model\u2019s knowledge base",
     methodology: "Methodology: Competence six-pillar export readiness framework · AI-assisted diagnostic · fixed scoring rubric for cross-company comparability.",
     reportDate: "Report date",
     backToPlan: "Back to plan",
@@ -185,7 +185,7 @@ const T = {
     execSummary: "الملخص التنفيذي",
     scorecard: "بطاقة نتائج الجاهزية",
     whyScore: "سبب هذه النتيجة",
-    researched: "تحليل السوق مدعوم ببحث مباشر على الإنترنت",
+    researched: "تحليل السوق مبني على قاعدة معرفة النموذج",
     methodology: "المنهجية: إطار الركائز الست لجاهزية التصدير من شركة التفوق · تشخيص مدعوم بالذكاء الاصطناعي · معايير تقييم ثابتة لقابلية المقارنة بين الشركات.",
     reportDate: "تاريخ التقرير",
     backToPlan: "عودة إلى الخطة",
@@ -327,55 +327,55 @@ const RUBRIC = `Fixed scoring rubric (0-100 per pillar). Anchors:
 - compliance_documentation: 0=no registrations/certificates; 50=basic docs, gaps for destination requirements; 100=all destination-specific requirements met or in progress.
 - logistics_readiness: 0=no export packaging/logistics knowledge; 50=basic understanding, no partners; 100=export packaging ready, forwarder relationships, Incoterms fluency for the trade lane.`;
 
-async function callClaude(prompt, useSearch = false) {
-  const body = {
-    model: "claude-sonnet-4-6",
-    max_tokens: 1000,
-    messages: [{ role: "user", content: prompt }],
-  };
-  if (useSearch) body.tools = [{ type: "web_search_20250305", name: "web_search" }];
-  const response = await fetch("/api/claude", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  const data = await response.json();
-  const text = (data.content || [])
-    .filter((b) => b.type === "text")
-    .map((b) => b.text)
-    .join("\n");
-  const clean = text.replace(/```json|```/g, "").trim();
+// OpenRouter free auto-router: picks a working free model and filters for the
+// capabilities each request needs (tools, structured output, vision).
+const OR_MODEL = "openrouter/free";
+
+function extractJson(data) {
+  const text = data?.choices?.[0]?.message?.content || "";
+  const clean = (typeof text === "string" ? text : "").replace(/```json|```/g, "").trim();
   const start = clean.indexOf("{");
   const end = clean.lastIndexOf("}");
   return JSON.parse(clean.slice(start, end + 1));
 }
 
-async function callClaudeResearch(prompt) {
-  try {
-    return await callClaude(prompt, true);
-  } catch {
-    return await callClaude(prompt, false); // fall back to model knowledge if search path fails
-  }
-}
-
-async function callClaudeFile(base64, mediaType, prompt) {
-  const isPdf = mediaType === "application/pdf";
-  const fileBlock = isPdf
-    ? { type: "document", source: { type: "base64", media_type: "application/pdf", data: base64 } }
-    : { type: "image", source: { type: "base64", media_type: mediaType, data: base64 } };
+async function callClaude(prompt, _useSearch = false) {
   const response = await fetch("/api/claude", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      model: "claude-sonnet-4-6",
-      max_tokens: 1000,
-      messages: [{ role: "user", content: [fileBlock, { type: "text", text: prompt }] }],
+      model: OR_MODEL,
+      max_tokens: 1200,
+      messages: [{ role: "user", content: prompt }],
     }),
   });
   const data = await response.json();
-  const text = (data.content || []).filter((b) => b.type === "text").map((b) => b.text).join("\n");
-  const clean = text.replace(/```json|```/g, "").trim();
-  return JSON.parse(clean.slice(clean.indexOf("{"), clean.lastIndexOf("}") + 1));
+  return extractJson(data);
+}
+
+// No free model offers built-in web search, so research falls back to model knowledge.
+async function callClaudeResearch(prompt) {
+  return await callClaude(prompt, false);
+}
+
+async function callClaudeFile(base64, mediaType, prompt) {
+  const dataUrl = `data:${mediaType};base64,${base64}`;
+  const content = mediaType === "application/pdf"
+    ? [{ type: "text", text: prompt + "\n\n(Note: a PDF data sheet was provided as an image URL below.)" },
+       { type: "image_url", image_url: { url: dataUrl } }]
+    : [{ type: "text", text: prompt },
+       { type: "image_url", image_url: { url: dataUrl } }];
+  const response = await fetch("/api/claude", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model: OR_MODEL,
+      max_tokens: 1200,
+      messages: [{ role: "user", content }],
+    }),
+  });
+  const data = await response.json();
+  return extractJson(data);
 }
 
 const fileAnalysisPrompt = `You are the product-intake analyzer of an SME export readiness tool. Analyze this product photo or data sheet.
@@ -438,7 +438,7 @@ Never present the code as certain; pick the single most likely heading.`;
 
 function planPrompt(fields, country, scores) {
   const weak = (scores || []).slice().sort((a, b) => a.score - b.score).slice(0, 2).map((s) => s.pillar).join(", ");
-  return `You are an export consultant writing a concise plan for an SME. First, search the web briefly for current import demand, key regulations, or market conditions for this product category in ${country} (1-2 searches maximum). Then write the plan grounded in what you found.
+  return `You are an export consultant writing a concise plan for an SME.
 
 Intake: ${intakeSummary(fields)}. Focus market: ${country}. Weakest readiness pillars: ${weak || "unknown"}.
 
@@ -446,7 +446,7 @@ Write two short sections, each in English AND natural professional Arabic (consu
 1. market_fit: why (or under what conditions) this product fits ${country} — current demand angle, competition reality, one honest caution. Max 70 words per language.
 2. entry_strategy: the single best-fit entry route for this company (direct export / agent-distributor / e-commerce / trade fairs & matchmaking) and why, with the first concrete step. Max 60 words per language.
 
-After any research, respond ONLY with JSON, no preamble, no markdown fences:
+Respond ONLY with JSON, no preamble, no markdown fences:
 {"market_fit_en":"...","market_fit_ar":"...","entry_strategy_en":"...","entry_strategy_ar":"..."}`;
 }
 

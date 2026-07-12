@@ -1,17 +1,17 @@
-// Serverless proxy: keeps ANTHROPIC_API_KEY server-side, forwards chat requests.
-// Basic per-instance rate limit — replace with durable rate limiting before wide public launch.
+// Serverless proxy: keeps OPENROUTER_API_KEY server-side, forwards chat requests
+// to OpenRouter's OpenAI-compatible endpoint. Basic per-instance rate limit.
 
 const hits = new Map(); // ip -> [timestamps]
 const WINDOW_MS = 60 * 60 * 1000; // 1 hour
-const MAX_PER_WINDOW = 60; // generous for one assessment session; blocks abuse loops
+const MAX_PER_WINDOW = 60;
 
 export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
 
-  const key = process.env.ANTHROPIC_API_KEY;
+  const key = process.env.OPENROUTER_API_KEY;
   if (!key) {
     return res.status(500).json({
-      error: "ANTHROPIC_API_KEY is not configured. Add it in Vercel: Project Settings -> Environment Variables, then redeploy.",
+      error: "OPENROUTER_API_KEY is not configured. Add it in Vercel: Project Settings -> Environment Variables, then redeploy.",
     });
   }
 
@@ -23,12 +23,13 @@ export default async function handler(req, res) {
   hits.set(ip, list);
 
   try {
-    const upstream = await fetch("https://api.anthropic.com/v1/messages", {
+    const upstream = await fetch("https://openrouter.ai/api/v1/chat/completions", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "x-api-key": key,
-        "anthropic-version": "2023-06-01",
+        "Authorization": `Bearer ${key}`,
+        "HTTP-Referer": "https://export-support-guide.vercel.app",
+        "X-Title": "Export Support Guide",
       },
       body: JSON.stringify(req.body),
     });
